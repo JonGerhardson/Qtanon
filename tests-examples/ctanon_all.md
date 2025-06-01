@@ -4,6 +4,8 @@ Published on May 30, 2025 at the following URLs
 https://ctmirror.org/2025/05/30/connecticut-passes-towing-law-reform/
 https://www.propublica.org/article/connecticut-passes-towing-law-reform
 
+---
+
 This article was produced for **org_001**’s **org_002** in partnership with [**org_003**](https://ctmirror.org/). [Sign up for **org_004**](https://www.**org_001**.org/newsletters/**org_004**) to get our stories in your inbox every week.
 
 **org_005** on **misc_001** overwhelmingly passed the most significant reform to the state’s towing policies in **misc_002**, a measure lawmakers said would help protect drivers from predatory towing.
