@@ -1,3 +1,6 @@
+Modified from the original as follows: all words recognized as a person, place, facility, commercial product, money, orginization, location, group, event, date, time, or quanity have been replaced with numbered placeholders, in bold fonnt. 
+
+Orignally published:
 Connecticut Legislature Passes Bill Overhauling Century-Old Towing Laws
  by Ginny Monk and Dave Altimari, The Connecticut Mirror
 Published on May 30, 2025 at the following URLs
