@@ -7,22 +7,59 @@ import subprocess # For running spaCy download command
 import threading 
 import traceback # For detailed error logging
 
+# Attempt to import document processing libraries
+try:
+    import docx # For .docx files
+except ImportError:
+    docx = None 
+try:
+    from odf import text as odf_text, teletype as odf_teletype # For .odt files
+    from odf.opendocument import load as odf_load
+except ImportError:
+    odf_text = None
+    odf_teletype = None
+    odf_load = None
+
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QLineEdit, QFileDialog, QTextEdit, QTabWidget, QGroupBox,
-    QCheckBox, QComboBox, QMessageBox
+    QCheckBox, QComboBox, QMessageBox, QGridLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QThread, QTimer
-from PyQt6.QtGui import QPalette, QKeySequence # For potential theming/accessibility, QKeySequence Added
+from PyQt6.QtGui import QPalette, QKeySequence 
 
 # --- Configuration ---
 TARGET_LARGE_MODEL = "en_core_web_lg"
 FALLBACK_MEDIUM_MODEL = "en_core_web_md"
 FALLBACK_SMALL_MODEL = "en_core_web_sm"
-DEFAULT_SPACY_MODEL = FALLBACK_MEDIUM_MODEL # Default if large isn't available initially
+DEFAULT_SPACY_MODEL = FALLBACK_MEDIUM_MODEL 
 
-AVAILABLE_SPACY_MODELS = [FALLBACK_SMALL_MODEL, FALLBACK_MEDIUM_MODEL, TARGET_LARGE_MODEL] # Base models
+AVAILABLE_SPACY_MODELS = [FALLBACK_SMALL_MODEL, FALLBACK_MEDIUM_MODEL, TARGET_LARGE_MODEL] 
+
+# Supported file types for input (excluding PDF)
+SUPPORTED_INPUT_FILE_TYPES = "Text Files (*.txt *.md);;Word Documents (*.docx);;OpenDocument Text (*.odt);;All Files (*)"
+# Filter for document types that need special reading logic
+RICH_DOCUMENT_EXTENSIONS = ('.docx', '.odt') 
+
+# Define spaCy labels for checkboxes and their display names
+SPACY_ENTITY_LABELS_FOR_UI = {
+    "PERSON": "Person",
+    "ORG": "Organization",
+    "GPE": "Geopolitical Entity (Countries, Cities)",
+    "LOC": "Location (Non-GPE, e.g., mountains)",
+    "FAC": "Facility (Buildings, Airports)",
+    "NORP": "Group (Nationalities, Religious/Political)",
+    "PRODUCT": "Product",
+    "EVENT": "Event",
+    "WORK_OF_ART": "Work of Art",
+    "DATE": "Date",
+    "MONEY": "Money",
+    "OTHER_TYPES": "Other (Time, Quantity, Language, etc.)" # Catch-all for UI
+}
+# Labels that will fall under "OTHER_TYPES" if selected
+OTHER_TYPE_SPACY_LABELS = ["TIME", "PERCENT", "QUANTITY", "ORDINAL", "CARDINAL", "LANGUAGE", "LAW"]
+
 
 # --- Helper: Markdown Cleaning (for spaCy input) ---
 def clean_text_from_markdown(raw_text):
@@ -50,11 +87,66 @@ def clean_text_from_markdown(raw_text):
     except Exception: 
         return raw_text.strip()
 
+# --- Document Reading Logic ---
+def read_document_content(file_path, log_callback=None):
+    if log_callback is None: log_callback = print
+    _, file_extension = os.path.splitext(file_path)
+    file_extension = file_extension.lower()
+    content = None
+
+    try:
+        if file_extension in ['.txt', '.md']:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            log_callback(f"Read plain text/markdown file: {file_path}")
+        elif file_extension == '.docx':
+            if docx is None:
+                log_callback("ERROR: 'python-docx' library is not installed. Please install it to read .docx files (pip install python-docx).")
+                QMessageBox.warning(None, "Library Missing", "The 'python-docx' library is required to read .docx files. Please install it.")
+                return None
+            doc = docx.Document(file_path)
+            full_text = []
+            for para in doc.paragraphs:
+                full_text.append(para.text)
+            content = '\n'.join(full_text)
+            log_callback(f"Read .docx file: {file_path}")
+        elif file_extension == '.odt':
+            if odf_load is None or odf_text is None or odf_teletype is None:
+                log_callback("ERROR: 'odfpy' library is not installed. Please install it to read .odt files (pip install odfpy).")
+                QMessageBox.warning(None, "Library Missing", "The 'odfpy' library is required to read .odt files. Please install it.")
+                return None
+            doc = odf_load(file_path)
+            texts = []
+            for element in doc.getElementsByType(odf_text.P): 
+                texts.append(odf_teletype.extractText(element))
+            content = '\n'.join(texts)
+            log_callback(f"Read .odt file: {file_path}")
+        elif file_extension == '.doc':
+            log_callback(f"Warning: Direct processing of .doc files is not fully supported. Please convert '{os.path.basename(file_path)}' to .docx, .odt, or .txt for best results.")
+            QMessageBox.information(None, "Limited Support", f"Direct reading of .doc files has limited support. Consider converting '{os.path.basename(file_path)}' to .docx or .txt.")
+            return None 
+        else:
+            log_callback(f"Unsupported file type for direct content reading: {file_extension}. Attempting to read as plain text.")
+            try: 
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                log_callback(f"Read unknown file type as plain text: {file_path}")
+            except Exception as e_txt:
+                 log_callback(f"Could not read file '{file_path}' as plain text either: {e_txt}")
+                 QMessageBox.warning(None, "File Error", f"Unsupported file type: {file_extension}\nCould not read as plain text.")
+                 return None
+        return content
+    except Exception as e:
+        log_callback(f"Error reading document content from '{file_path}': {str(e)}\n{traceback.format_exc()}")
+        QMessageBox.critical(None, "File Read Error", f"Could not read file: {file_path}\nError: {e}")
+        return None
+
+
 # --- spaCy Model Management ---
 class SpacyModelManager(QObject):
     log_signal = pyqtSignal(str)
     download_finished_signal = pyqtSignal(bool, str) 
-    _model_cache = {} # Class level cache for loaded models
+    _model_cache = {} 
 
     @classmethod
     def get_model(cls, model_name, log_callback=None):
@@ -133,7 +225,6 @@ class _SpacyDownloadWorker(QObject):
     def run(self):
         if not self._is_running: return
         success = False
-        # Corrected SyntaxError: expected ':'
         try: 
             python_executable = sys.executable or "python"
             command = [python_executable, "-m", "spacy", "download", self.model_name]
@@ -183,38 +274,51 @@ class _SpacyDownloadWorker(QObject):
         self._is_running = False
 
 # --- 1. spaCy Entity Extraction Logic ---
-def sanitize_placeholder(text):
-    return re.sub(r'\W+', '_', text.lower())[:30].strip('_')
-
-def extract_entities_to_csv_data(text_content, spacy_model_name=DEFAULT_SPACY_MODEL, log_callback=None):
+def extract_entities_to_csv_data(text_content, spacy_model_name=DEFAULT_SPACY_MODEL, selected_spacy_labels=None, log_callback=None):
     if log_callback is None: log_callback = print
+    if selected_spacy_labels is None: selected_spacy_labels = ["PERSON"] 
+
     nlp = SpacyModelManager.get_model(spacy_model_name, log_callback)
     if nlp is None: 
         log_callback(f"Failed to get or load spaCy model '{spacy_model_name}'. Cannot extract entities.")
         return None 
-    cleaned_text = clean_text_from_markdown(text_content)
+    cleaned_text = clean_text_from_markdown(text_content) 
     if not cleaned_text or not cleaned_text.strip():
         log_callback("Error: Text content is empty or became empty after Markdown cleaning for NER.")
         return None
     doc = nlp(cleaned_text)
     extracted_map = {} 
-    counts = {"person": 0, "org": 0, "place": 0, "group": 0, "event": 0, "misc": 0}
-    target_labels_map = {"PERSON": "person", "ORG": "org", "GPE": "place", "LOC": "place", "FAC": "place", "NORP": "group", "EVENT": "event"}
-    log_callback("\nIdentifying Entities with spaCy...")
+    counts = {"person": 0, "org": 0, "place": 0, "thing": 0, "misc": 0} 
+    
+    placeholder_prefix_map = {
+        "PERSON": "person", "ORG": "org", "GPE": "place", "LOC": "place",  
+        "FAC": "place", "PRODUCT": "thing", "EVENT": "thing", 
+        "WORK_OF_ART": "thing", "LAW": "thing", "LANGUAGE": "thing",
+    }
+    log_callback(f"\nIdentifying Entities with spaCy (Selected types: {', '.join(selected_spacy_labels)})...")
     for ent in doc.ents:
+        if ent.label_ not in selected_spacy_labels: 
+            if "OTHER_TYPES" in selected_spacy_labels and ent.label_ in OTHER_TYPE_SPACY_LABELS:
+                pass 
+            else:
+                continue
+
         entity_text = ent.text.strip()
-        label_prefix = target_labels_map.get(ent.label_, "misc") 
+        label_prefix = placeholder_prefix_map.get(ent.label_, "misc") 
+                                        
         if not entity_text or len(entity_text) < 2 : continue
-        if entity_text.isnumeric() and ent.label_ not in ["MONEY", "DATE", "TIME", "PERCENT", "QUANTITY", "ORDINAL", "CARDINAL"]: continue
+        
+        if entity_text.isnumeric() and label_prefix in ["person", "org", "place", "thing"]:
+            label_prefix = "misc" 
+
         if entity_text not in extracted_map:
             counts[label_prefix] = counts.get(label_prefix, 0) + 1
-            sane_entity_part = sanitize_placeholder(entity_text.split()[0]) 
-            base_placeholder = f"{label_prefix}_{sane_entity_part}_{counts[label_prefix]}"
-            if len(base_placeholder) > 50: 
-                base_placeholder = f"{label_prefix}_{counts[label_prefix]}" 
+            base_placeholder = f"{label_prefix}_{counts[label_prefix]:03d}"
+            
             extracted_map[entity_text] = base_placeholder
             log_callback(f"  - Found: '{entity_text}' (Type: {ent.label_}), Placeholder: '{base_placeholder}'")
-    if not extracted_map: log_callback("No relevant entities found by spaCy."); return []
+            
+    if not extracted_map: log_callback("No relevant entities found by spaCy based on selected types."); return []
     return [[placeholder, entity] for entity, placeholder in extracted_map.items()]
 
 # --- 2. Anonymization Logic ---
@@ -248,27 +352,29 @@ class PersonNameReplacer:
 def de_anonymize_text_logic(content, replacements_data, log_callback=None):
     if log_callback is None: log_callback = print
     log_callback(f"\nPerforming {len(replacements_data)} de-anonymization replacements...")
-    replacements_data.sort(key=lambda x: len(x[0]), reverse=True)
+    replacements_data.sort(key=lambda x: len(x[0]), reverse=True) 
     for base_placeholder, real_entity in replacements_data:
         if not base_placeholder: continue
         original_content_snapshot = content
-        bold_placeholder_pattern = r'\*\*' + re.escape(base_placeholder) + r'\*\*'
+        escaped_base = re.escape(base_placeholder)
+        bold_placeholder_pattern = r'\*\*' + escaped_base + r'\*\*'
+        
         try:
             if base_placeholder.startswith("person_"):
                 name_parts = real_entity.split(); last_name = name_parts[-1] if name_parts else real_entity
                 if not name_parts or len(name_parts) == 1:
-                    content = re.sub(bold_placeholder_pattern, real_entity, content, flags=re.IGNORECASE)
+                    content = re.sub(bold_placeholder_pattern, real_entity, content, flags=re.IGNORECASE) 
                     if content != original_content_snapshot: log_callback(f"  De-anonymized '{base_placeholder}' (Person - single) to '{real_entity}'.")
                 else:
                     replacer_instance = PersonNameReplacer(real_entity, last_name)
                     content = re.sub(bold_placeholder_pattern, replacer_instance, content, flags=re.IGNORECASE)
                     if content != original_content_snapshot: log_callback(f"  De-anonymized '{base_placeholder}' (Person - multi) to '{real_entity}'/'{last_name}'.")
-            elif base_placeholder.startswith(("org_", "place_", "group_", "misc_", "entity_", "fac_", "event_")):
+            elif base_placeholder.startswith(("org_", "place_", "thing_", "misc_", "group_")): 
                 content = re.sub(bold_placeholder_pattern, real_entity, content, flags=re.IGNORECASE)
                 if content != original_content_snapshot: log_callback(f"  De-anonymized '{base_placeholder}' to '{real_entity}'.")
-            else:
+            else: 
+                log_callback(f"  Warning: Unknown placeholder prefix for '{base_placeholder}' during de-anonymization. Applying simple replacement with '{real_entity}'.")
                 content = re.sub(bold_placeholder_pattern, real_entity, content, flags=re.IGNORECASE)
-                if content != original_content_snapshot: log_callback(f"  De-anonymized (unknown type) '{base_placeholder}' to '{real_entity}'.")
         except re.error as e: log_callback(f"  Regex error for placeholder '{base_placeholder}': {str(e)}\n{traceback.format_exc()}"); continue
     return content
 
@@ -326,8 +432,11 @@ class Worker(QObject):
         try:
             if not self._is_running: return
             if self.mode == 'generate_csv':
-                text_content = self.kwargs['text_content']; spacy_model = self.kwargs['spacy_model']
-                result = extract_entities_to_csv_data(text_content, spacy_model, log_callback=self.progress.emit)
+                text_content = self.kwargs['text_content']
+                spacy_model = self.kwargs['spacy_model']
+                # Corrected: Use 'selected_spacy_labels' as the key from kwargs
+                selected_labels_arg = self.kwargs['selected_spacy_labels'] 
+                result = extract_entities_to_csv_data(text_content, spacy_model, selected_spacy_labels=selected_labels_arg, log_callback=self.progress.emit)
             elif self.mode == 'anonymize':
                 content = self.kwargs['content']; replacements_map = self.kwargs['replacements_map']; exclusions = self.kwargs['exclusions']
                 result = anonymize_text_logic(content, replacements_map, exclusions, log_callback=self.progress.emit)
@@ -343,28 +452,59 @@ class Worker(QObject):
 class NERAnonymizerApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("QTAnon - NER Anonymizer/De-Anonymizer Tool v1.2") 
-        self.setGeometry(100, 100, 800, 700) 
+        self.setWindowTitle("QTAnon - NER Anonymizer/De-Anonymizer Tool v1.6") # Version bump
+        self.setGeometry(100, 100, 800, 750) 
         self.worker_thread = None; self.worker_object = None 
         self.spacy_manager = SpacyModelManager()
         self.spacy_manager.log_signal.connect(self.log_message)
         self.spacy_manager.download_finished_signal.connect(self.on_model_download_finished)
+        self.gen_csv_entity_type_checkboxes = {} 
+        # Store last used paths
+        self.last_original_doc_path_for_csv = ""
+        self.last_generated_csv_path = ""
         self.init_ui()
         QTimer.singleShot(100, self.check_and_prompt_for_initial_model_setup) 
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
-        tabs = QTabWidget(); 
-        tabs.addTab(self.create_generate_csv_tab(), "1. Generate Entity Map (CSV)")
-        tabs.addTab(self.create_anonymize_tab(), "2. Anonymize Text")
-        tabs.addTab(self.create_de_anonymize_tab(), "3. De-anonymize Text")
-        main_layout.addWidget(tabs)
+        self.tabs = QTabWidget(); # Make tabs an instance variable
+        self.tabs.currentChanged.connect(self.on_tab_changed) # Connect signal
+        self.tabs.addTab(self.create_generate_csv_tab(), "1. Generate Entity Map (CSV)")
+        self.tabs.addTab(self.create_anonymize_tab(), "2. Anonymize Text")
+        self.tabs.addTab(self.create_de_anonymize_tab(), "3. De-anonymize Text")
+        main_layout.addWidget(self.tabs)
         log_group = QGroupBox("Status Log"); log_layout = QVBoxLayout()
         self.log_text_edit = QTextEdit(); self.log_text_edit.setReadOnly(True)
         self.log_text_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         log_layout.addWidget(self.log_text_edit); log_group.setLayout(log_layout)
         main_layout.addWidget(log_group)
         self.log_message("Application started. Select a mode. Tool will check for spaCy models.")
+
+    def on_tab_changed(self, index):
+        """Called when the current tab changes. Auto-populates fields if applicable."""
+        current_tab_text = self.tabs.tabText(index)
+        if current_tab_text == "2. Anonymize Text":
+            if self.last_generated_csv_path and os.path.exists(self.last_generated_csv_path):
+                self.anon_csv_map_path.setText(self.last_generated_csv_path)
+                self.log_message(f"Auto-filled CSV path for Anonymize tab: {self.last_generated_csv_path}")
+            if self.last_original_doc_path_for_csv and os.path.exists(self.last_original_doc_path_for_csv):
+                self.anon_input_text_path.setText(self.last_original_doc_path_for_csv)
+                self.log_message(f"Auto-filled Original Document path for Anonymize tab: {self.last_original_doc_path_for_csv}")
+                # Suggest output name based on this newly set input
+                self.suggest_output_filename_direct(
+                    os.path.join(os.path.dirname(self.last_original_doc_path_for_csv), 
+                                 os.path.splitext(os.path.basename(self.last_original_doc_path_for_csv))[0] + "_anonymized" + 
+                                 (".md" if self.last_original_doc_path_for_csv.lower().endswith(".md") else ".txt")),
+                    self.anon_output_text_path
+                )
+
+
+        elif current_tab_text == "3. De-anonymize Text":
+            if self.last_generated_csv_path and os.path.exists(self.last_generated_csv_path):
+                self.deanon_csv_map_path.setText(self.last_generated_csv_path)
+                self.log_message(f"Auto-filled CSV path for De-anonymize tab: {self.last_generated_csv_path}")
+            # De-anonymize input path is usually the output of anonymization, so not auto-filled from original doc.
+
 
     def check_and_prompt_for_initial_model_setup(self):
         if not SpacyModelManager.is_model_installed_static(TARGET_LARGE_MODEL):
@@ -427,18 +567,17 @@ class NERAnonymizerApp(QWidget):
                 self.gen_csv_spacy_model_combo.addItem(model)
 
 
-    def create_file_input_group(self, label_text): # Removed line_edit_object_name
+    def create_file_input_group(self, label_text): 
         group = QHBoxLayout(); label = QLabel(label_text); 
-        line_edit = FileLineEdit() # Instantiated here
+        line_edit = FileLineEdit() 
         browse_button = QPushButton("Browse...")
         group.addWidget(label); group.addWidget(line_edit); group.addWidget(browse_button)
-        # Tab order for internal elements of this group will be natural or set by caller if needed
         return group, line_edit, browse_button
 
     def create_generate_csv_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
-        input_group, self.gen_csv_input_text_path, btn1 = self.create_file_input_group("Original Text/MD File:")
-        btn1.clicked.connect(lambda: self.browse_file(self.gen_csv_input_text_path, "Open Text/Markdown File"))
+        input_group, self.gen_csv_input_text_path, btn1 = self.create_file_input_group("Original Text/MD/Docx/Odt File:")
+        btn1.clicked.connect(lambda: self.browse_file(self.gen_csv_input_text_path, "Open Document File", file_filter=SUPPORTED_INPUT_FILE_TYPES))
         layout.addLayout(input_group)
         
         output_group, self.gen_csv_output_csv_path, btn2 = self.create_file_input_group("Output CSV Entity Map:")
@@ -450,18 +589,42 @@ class NERAnonymizerApp(QWidget):
         self.update_model_combo_with_installed_models() 
         self.gen_csv_spacy_model_combo.setEditable(True)
         model_layout.addWidget(self.gen_csv_spacy_model_combo); layout.addLayout(model_layout)
+
+        entity_types_group = QGroupBox("Entity Types to Extract (for CSV Generation)")
+        entity_types_layout = QGridLayout() 
+        self.gen_csv_entity_type_checkboxes = {} 
+        
+        row, col = 0, 0
+        for spacy_label, display_name in SPACY_ENTITY_LABELS_FOR_UI.items():
+            checkbox = QCheckBox(display_name)
+            if spacy_label == "PERSON": 
+                checkbox.setChecked(True)
+            self.gen_csv_entity_type_checkboxes[spacy_label] = checkbox
+            entity_types_layout.addWidget(checkbox, row, col)
+            col += 1
+            if col >= 2: 
+                col = 0
+                row += 1
+        
+        entity_types_group.setLayout(entity_types_layout)
+        layout.addWidget(entity_types_group)
         
         self.gen_csv_process_button = QPushButton("&Generate Entity Map CSV")
         self.gen_csv_process_button.setShortcut(QKeySequence("Ctrl+G")) 
         self.gen_csv_process_button.clicked.connect(self.run_generate_csv)
         layout.addWidget(self.gen_csv_process_button, alignment=Qt.AlignmentFlag.AlignCenter); layout.addStretch()
         
-        # Set overall tab order for this tab
         QWidget.setTabOrder(self.gen_csv_input_text_path, btn1)
         QWidget.setTabOrder(btn1, self.gen_csv_output_csv_path)
         QWidget.setTabOrder(self.gen_csv_output_csv_path, btn2)
         QWidget.setTabOrder(btn2, self.gen_csv_spacy_model_combo)
-        QWidget.setTabOrder(self.gen_csv_spacy_model_combo, self.gen_csv_process_button)
+        current_tab_focus_widget = self.gen_csv_spacy_model_combo
+        for spacy_label in SPACY_ENTITY_LABELS_FOR_UI.keys(): 
+            if spacy_label in self.gen_csv_entity_type_checkboxes:
+                cb = self.gen_csv_entity_type_checkboxes[spacy_label]
+                QWidget.setTabOrder(current_tab_focus_widget, cb)
+                current_tab_focus_widget = cb
+        QWidget.setTabOrder(current_tab_focus_widget, self.gen_csv_process_button)
         return tab
 
     def create_anonymize_tab(self):
@@ -472,15 +635,15 @@ class NERAnonymizerApp(QWidget):
         
         self.anon_csv_header_checkbox = QCheckBox("CSV has header row"); layout.addWidget(self.anon_csv_header_checkbox)
         
-        input_text_group, self.anon_input_text_path, btn2 = self.create_file_input_group("Original Text File (to anonymize):")
-        btn2.clicked.connect(lambda: self.browse_file(self.anon_input_text_path, "Open Original Text File"))
+        input_text_group, self.anon_input_text_path, btn2 = self.create_file_input_group("Original Text/MD/Docx/Odt File (to anonymize):")
+        btn2.clicked.connect(lambda: self.browse_file(self.anon_input_text_path, "Open Document File", file_filter=SUPPORTED_INPUT_FILE_TYPES))
         layout.addLayout(input_text_group)
         
         exclusions_layout = QHBoxLayout(); exclusions_layout.addWidget(QLabel("Exclusions (comma-separated):"))
         self.anon_exclusions_edit = QLineEdit(); exclusions_layout.addWidget(self.anon_exclusions_edit); layout.addLayout(exclusions_layout)
         
-        output_text_group, self.anon_output_text_path, btn3 = self.create_file_input_group("Output Anonymized File:")
-        btn3.clicked.connect(lambda: self.browse_file(self.anon_output_text_path, "Save Anonymized File As", save_mode=True))
+        output_text_group, self.anon_output_text_path, btn3 = self.create_file_input_group("Output Anonymized File (as .txt or .md):")
+        btn3.clicked.connect(lambda: self.browse_file(self.anon_output_text_path, "Save Anonymized File As", save_mode=True, file_filter="Text Files (*.txt *.md);;All Files (*)"))
         layout.addLayout(output_text_group)
         
         self.anon_process_button = QPushButton("&Anonymize Text")
@@ -506,12 +669,12 @@ class NERAnonymizerApp(QWidget):
         
         self.deanon_csv_header_checkbox = QCheckBox("CSV has header row"); layout.addWidget(self.deanon_csv_header_checkbox)
         
-        input_text_group, self.deanon_input_text_path, btn2 = self.create_file_input_group("Anonymized Text File (with placeholders):")
-        btn2.clicked.connect(lambda: self.browse_file(self.deanon_input_text_path, "Open Anonymized Text File"))
+        input_text_group, self.deanon_input_text_path, btn2 = self.create_file_input_group("Anonymized Text/MD File (with placeholders):")
+        btn2.clicked.connect(lambda: self.browse_file(self.deanon_input_text_path, "Open Anonymized Text File", file_filter="Text Files (*.txt *.md);;All Files (*)"))
         layout.addLayout(input_text_group)
         
-        output_text_group, self.deanon_output_text_path, btn3 = self.create_file_input_group("Output De-anonymized File:")
-        btn3.clicked.connect(lambda: self.browse_file(self.deanon_output_text_path, "Save De-anonymized File As", save_mode=True))
+        output_text_group, self.deanon_output_text_path, btn3 = self.create_file_input_group("Output De-anonymized File (as .txt or .md):")
+        btn3.clicked.connect(lambda: self.browse_file(self.deanon_output_text_path, "Save De-anonymized File As", save_mode=True, file_filter="Text Files (*.txt *.md);;All Files (*)"))
         layout.addLayout(output_text_group)
         
         self.deanon_process_button = QPushButton("&De-anonymize Text")
@@ -533,16 +696,22 @@ class NERAnonymizerApp(QWidget):
         else: file_path, _ = QFileDialog.getOpenFileName(self, caption, "", file_filter)
         if file_path:
             line_edit_widget.setText(file_path); self.log_message(f"Selected file: {file_path}")
-            if line_edit_widget == self.gen_csv_input_text_path: self.suggest_output_filename(file_path, self.gen_csv_output_csv_path, "_entity_map.csv")
-            elif line_edit_widget == self.anon_input_text_path: self.suggest_output_filename(file_path, self.anon_output_text_path, "_anonymized_output")
-            elif line_edit_widget == self.deanon_input_text_path: self.suggest_output_filename(file_path, self.deanon_output_text_path, "_de-anonymized_output")
+            base_name, orig_ext = os.path.splitext(os.path.basename(file_path))
+            input_dir = os.path.dirname(file_path)
 
-    def suggest_output_filename(self, input_path, output_line_edit, suffix_ext_part):
-        if not output_line_edit.text():
-            base, orig_ext = os.path.splitext(input_path)
-            if suffix_ext_part.endswith(".csv"): output_name = base + suffix_ext_part
-            else: output_name = base + suffix_ext_part + orig_ext
-            output_line_edit.setText(output_name); self.log_message(f"Suggested output: {output_name}")
+            if line_edit_widget == self.gen_csv_input_text_path:
+                self.suggest_output_filename_direct(os.path.join(input_dir, base_name + "_entity_map.csv"), self.gen_csv_output_csv_path)
+            elif line_edit_widget == self.anon_input_text_path:
+                self.suggest_output_filename_direct(os.path.join(input_dir, base_name + "_anonymized" + (".md" if orig_ext.lower() == ".md" else ".txt")), self.anon_output_text_path)
+            elif line_edit_widget == self.deanon_input_text_path:
+                 self.suggest_output_filename_direct(os.path.join(input_dir, base_name + "_de-anonymized" + (".md" if orig_ext.lower() == ".md" else ".txt")), self.deanon_output_text_path)
+
+
+    def suggest_output_filename_direct(self, suggested_path, output_line_edit):
+        if not output_line_edit.text(): 
+            output_line_edit.setText(suggested_path)
+            self.log_message(f"Suggested output: {suggested_path}")
+
 
     def log_message(self, message): self.log_text_edit.append(message); QApplication.processEvents()
     
@@ -571,9 +740,18 @@ class NERAnonymizerApp(QWidget):
         self.set_buttons_enabled(True)
         if self.worker_object: 
             mode = self.worker_object.mode
-            if mode == 'generate_csv': self.handle_generate_csv_finished_from_worker(result)
-            elif mode == 'anonymize': self.handle_text_processing_finished_from_worker(result, self.anon_output_text_path.text(), "Anonymization")
-            elif mode == 'de_anonymize': self.handle_text_processing_finished_from_worker(result, self.deanon_output_text_path.text(), "De-anonymization")
+            if mode == 'generate_csv': 
+                self.handle_generate_csv_finished_from_worker(result)
+                # Store paths if CSV generation was successful
+                if result is not None and result: # Check if result is not None and not an empty list
+                    self.last_original_doc_path_for_csv = self.gen_csv_input_text_path.text()
+                    self.last_generated_csv_path = self.gen_csv_output_csv_path.text()
+                    self.log_message(f"Stored for auto-fill: Original Doc='{self.last_original_doc_path_for_csv}', Generated CSV='{self.last_generated_csv_path}'")
+
+            elif mode == 'anonymize': 
+                self.handle_text_processing_finished_from_worker(result, self.anon_output_text_path.text(), "Anonymization")
+            elif mode == 'de_anonymize': 
+                self.handle_text_processing_finished_from_worker(result, self.deanon_output_text_path.text(), "De-anonymization")
         self.worker_thread = None; self.worker_object = None
 
     def run_generate_csv(self):
@@ -591,12 +769,25 @@ class NERAnonymizerApp(QWidget):
             else:
                 QMessageBox.warning(self, "Model Error", f"Custom spaCy model '{spacy_model}' is not installed or recognized. Please install it or select an available one."); return
 
-        try:
-            with open(input_file, 'r', encoding='utf-8') as f: text_content = f.read()
-            if not text_content.strip(): QMessageBox.warning(self, "Input Error", "Input text file is empty."); return
-        except Exception as e: QMessageBox.critical(self, "File Error", f"Error reading input file: {str(e)}\n{traceback.format_exc()}"); return
-        self.log_message(f"Starting CSV generation: Input='{input_file}', Output='{output_csv}', Model='{spacy_model}'")
-        if not self.start_worker(mode='generate_csv', text_content=text_content, spacy_model=spacy_model):
+        text_content = read_document_content(input_file, self.log_message)
+        if text_content is None: return 
+        if not text_content.strip(): QMessageBox.warning(self, "Input Error", "Input text file is empty or content could not be extracted."); return
+        
+        selected_labels_for_extraction = []
+        for spacy_label, checkbox in self.gen_csv_entity_type_checkboxes.items():
+            if checkbox.isChecked():
+                if spacy_label == "OTHER_TYPES":
+                    selected_labels_for_extraction.extend(OTHER_TYPE_SPACY_LABELS)
+                    # Add a generic catch-all if needed, or rely on spaCy's default label if not in placeholder_prefix_map
+                    # For now, OTHER_TYPES checkbox enables a set of specific labels.
+                else:
+                    selected_labels_for_extraction.append(spacy_label)
+        
+        if not selected_labels_for_extraction:
+            QMessageBox.warning(self, "Input Error", "Please select at least one entity type to extract."); return
+
+        self.log_message(f"Starting CSV generation: Input='{input_file}', Output='{output_csv}', Model='{spacy_model}', Types='{', '.join(selected_labels_for_extraction)}'")
+        if not self.start_worker(mode='generate_csv', text_content=text_content, spacy_model=spacy_model, selected_spacy_labels=list(set(selected_labels_for_extraction))): 
             self.set_buttons_enabled(True) 
 
     def handle_generate_csv_finished_from_worker(self, entity_data_for_csv):
@@ -608,7 +799,16 @@ class NERAnonymizerApp(QWidget):
         try:
             with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile); writer.writerow(["base_placeholder", "real_entity_name"]); writer.writerows(entity_data_for_csv)
-            self.log_message(f"Successfully generated entity map: '{output_csv}'"); QMessageBox.information(self, "Success", f"Entity map CSV saved to:\n{output_csv}")
+            self.log_message(f"Successfully generated entity map: '{output_csv}'"); 
+            QMessageBox.information(self, "Success", f"Entity map CSV saved to:\n{output_csv}")
+            # Store paths for auto-fill
+            self.last_original_doc_path_for_csv = self.gen_csv_input_text_path.text()
+            self.last_generated_csv_path = output_csv
+            self.log_message(f"Stored for auto-fill: Original Doc='{self.last_original_doc_path_for_csv}', Generated CSV='{self.last_generated_csv_path}'")
+            # Trigger a tab change event manually if the user is still on the first tab,
+            # to ensure fields are populated if they immediately switch.
+            # Or, just let the natural tab switch handle it.
+            # self.on_tab_changed(self.tabs.currentIndex()) # This might be too aggressive
         except Exception as e: self.log_message(f"Error writing CSV: {str(e)}\n{traceback.format_exc()}"); QMessageBox.critical(self, "File Error", f"Error writing CSV: {e}")
 
     def run_anonymize(self):
@@ -618,9 +818,10 @@ class NERAnonymizerApp(QWidget):
         if not csv_file or not input_file or not output_file: QMessageBox.warning(self, "Input Error", "Provide all file paths for anonymization."); return
         replacements_map = read_csv_mapping_for_gui(csv_file, has_header, self.log_message)
         if replacements_map is None or not replacements_map: QMessageBox.critical(self, "CSV Error", "Could not load CSV or CSV is empty. Aborting."); return
-        try:
-            with open(input_file, 'r', encoding='utf-8') as f: content = f.read()
-        except Exception as e: QMessageBox.critical(self, "File Error", f"Error reading input file: {str(e)}\n{traceback.format_exc()}"); return
+        
+        content = read_document_content(input_file, self.log_message)
+        if content is None: return
+        
         self.log_message(f"Starting anonymization: Input='{input_file}', Output='{output_file}', CSV='{csv_file}'")
         if not self.start_worker(mode='anonymize', content=content, replacements_map=replacements_map, exclusions=exclusions):
             self.set_buttons_enabled(True)
@@ -631,6 +832,7 @@ class NERAnonymizerApp(QWidget):
         if not csv_file or not input_file or not output_file: QMessageBox.warning(self, "Input Error", "Provide all file paths for de-anonymization."); return
         replacements_map = read_csv_mapping_for_gui(csv_file, has_header, self.log_message)
         if replacements_map is None or not replacements_map: QMessageBox.critical(self, "CSV Error", "Could not load CSV or CSV is empty. Aborting."); return
+        
         try:
             with open(input_file, 'r', encoding='utf-8') as f: content = f.read()
             if not content.strip():
@@ -638,6 +840,7 @@ class NERAnonymizerApp(QWidget):
                  with open(output_file, 'w', encoding='utf-8') as outfile: outfile.write("")
                  self.log_message(f"Input file empty. Empty output: '{output_file}'."); return
         except Exception as e: QMessageBox.critical(self, "File Error", f"Error reading input file: {str(e)}\n{traceback.format_exc()}"); return
+        
         self.log_message(f"Starting de-anonymization: Input='{input_file}', Output='{output_file}', CSV='{csv_file}'")
         if not self.start_worker(mode='de_anonymize', content=content, replacements_map=replacements_map):
             self.set_buttons_enabled(True)
@@ -668,4 +871,3 @@ if __name__ == "__main__":
     window.show()
     try: sys.exit(app.exec())
     except SystemExit: print("Closing application...")
-
