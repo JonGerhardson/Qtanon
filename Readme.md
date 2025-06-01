@@ -4,7 +4,9 @@ Find named entities using [spaCy]([url](https://github.com/explosion/spaCy)), sa
 It is useful however for doing things like removing the names of people before pasting something into chatGPT, etc. 
 
 Input: txt, md, doc, docx, odt
-Output: csv (named entity list); markdown or text for "anonymized" files. 
+
+Output: csv (named entity list); 
+  markdown or text for altered version of input file
 
 To reiterate however: **This is not a cyber security tool. Nothing is encrypted, there are probably bugs, etc. It is just an overly complicated find and replace tool**. 
 
