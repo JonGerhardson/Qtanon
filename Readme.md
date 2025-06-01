@@ -3,6 +3,11 @@ Find named entities using [spaCy]([url](https://github.com/explosion/spaCy)), sa
 
 It is useful however for doing things like removing the names of people before pasting something into chatGPT, etc. 
 
+Input: txt, md, doc, docx, odt
+Output: csv (named entity list); markdown or text for "anonymized" files. 
+
+To reiterate however: **This is not a cyber security tool. Nothing is encrypted, there are probably bugs, etc. It is just an overly complicated find and replace tool**. 
+
 It is called Qtanon because the GUI is made with [Qt]([url](https://en.wikipedia.org/wiki/Qt_(software))) and I am very funny. 
 
 To run download the python script and
