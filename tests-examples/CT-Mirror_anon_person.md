@@ -1,3 +1,6 @@
+Changed from the orignal as follows: All named persons replaced with placeholders in bold text. 
+
+
 Connecticut Legislature Passes Bill Overhauling Century-Old Towing Laws
  by Ginny Monk and Dave Altimari, The Connecticut Mirror
 Published on May 30, 2025 at the following URLs
