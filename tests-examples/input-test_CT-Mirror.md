@@ -1,3 +1,11 @@
+Connecticut Legislature Passes Bill Overhauling Century-Old Towing Laws
+ by Ginny Monk and Dave Altimari, The Connecticut Mirror
+Published on May 30, 2025 at the following URLs
+https://ctmirror.org/2025/05/30/connecticut-passes-towing-law-reform/
+https://www.propublica.org/article/connecticut-passes-towing-law-reform
+
+---
+
 This article was produced for ProPublica’s Local Reporting Network in partnership with [The Connecticut Mirror](https://ctmirror.org/). [Sign up for Dispatches](https://www.propublica.org/newsletters/dispatches) to get our stories in your inbox every week.
 
 The Connecticut Senate on Friday overwhelmingly passed the most significant reform to the state’s towing policies in decades, a measure lawmakers said would help protect drivers from predatory towing.
